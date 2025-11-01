@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from utils.config_loader import load_config
 from langchain_google_genai import GoogleGenerativeAI, ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from logger.custom_logger import CustomLogger
 from exception.custom_exception import DocumentPortalException
 
@@ -59,48 +60,72 @@ class ModelLoader:
             raise DocumentPortalException(f"Failed to load embedding model: {str(e)}")
 
     def load_llm(self):
-        """Load and Return the LLM Model"""
+        """Load and Return the LLM Model with priority: OpenAI → Gemini → Groq"""
 
         llm_block = self.config["llm"]
 
-        provider_key = os.getenv("LLM_PROVIDER", "google")  # Default to google for Gemini 2.0 Flash
+        # Priority order: OpenAI first, then Google, then Groq
+        provider_priority = []
+        if self.api_keys.get("OPENAI_API_KEY"):
+            provider_priority.append("openai")
+        if self.api_keys.get("GOOGLE_API_KEY"):
+            provider_priority.append("google")
+        if self.api_keys.get("GROQ_API_KEY"):
+            provider_priority.append("groq")
 
-        if provider_key not in llm_block:
-            log.error("LLM provider not found in config", provider_key = provider_key)
-            raise ValueError(f"Provider '{provider_key}' not found in config")
-        
-        llm_config = llm_block[provider_key]
-        provider = llm_config.get("provider")
-        model_name = llm_config.get("model_name")
-        temperature = llm_config.get("temperature", 0.2)
-        max_tokens = llm_config.get("max_output_tokens", 2048)
+        if not provider_priority:
+            log.error("No LLM API keys available")
+            raise ValueError("No LLM API keys configured")
 
-        log.info("Loading LLM", provider = provider, model = model_name, temperature = temperature, max_tokens = max_tokens)
+        # Try each provider in priority order
+        last_error = None
+        for provider_key in provider_priority:
+            try:
+                if provider_key not in llm_block:
+                    continue
+                
+                llm_config = llm_block[provider_key]
+                provider = llm_config.get("provider")
+                model_name = llm_config.get("model_name")
+                temperature = llm_config.get("temperature", 0.2)
+                max_tokens = llm_config.get("max_output_tokens", 2048)
 
-        if provider == "google":
-            llm = ChatGoogleGenerativeAI(
-                model = model_name,  # Will use gemini-2.0-flash-exp
-                temperature = temperature,
-                max_output_tokens = max_tokens
-            )
-            return llm
-        
-        elif provider == "groq":
-            llm = ChatGroq(
-                model = model_name,
-                temperature=temperature
-            )
-            return llm
-        # elif provider == "openai":
-        #     return ChatOpenAI(
-        #         model=model_name,
-        #         api_key=self.api_keys["OPENAI_API_KEY"],
-        #         temperature=temperature,
-        #         max_tokens=max_tokens
-        #     )
-        else:
-            log.error("Unsupported LLM provider", provider=provider)
-            raise ValueError(f"Unsupported LLM provider: {provider}")
+                log.info("Loading LLM", provider=provider, model=model_name, temperature=temperature, max_tokens=max_tokens)
+
+                if provider == "openai":
+                    llm = ChatOpenAI(
+                        model=model_name,
+                        temperature=temperature,
+                        max_tokens=max_tokens
+                    )
+                    log.info("Loaded LLM successfully", class_name="ChatOpenAI")
+                    return llm
+
+                elif provider == "google":
+                    llm = ChatGoogleGenerativeAI(
+                        model=model_name,
+                        temperature=temperature,
+                        max_output_tokens=max_tokens
+                    )
+                    log.info("Loaded LLM successfully", class_name="ChatGoogleGenerativeAI")
+                    return llm
+                
+                elif provider == "groq":
+                    llm = ChatGroq(
+                        model=model_name,
+                        temperature=temperature
+                    )
+                    log.info("Loaded LLM successfully", class_name="ChatGroq")
+                    return llm
+
+            except Exception as e:
+                last_error = e
+                log.warning("LLM provider failed, trying next", provider=provider_key, error=str(e))
+                continue
+
+        # All providers failed
+        log.error("All LLM providers failed", error=str(last_error))
+        raise DocumentPortalException(f"Could not load any LLM provider. Last error: {str(last_error)}")
 
 if __name__ == "__main__":
     loader = ModelLoader()
