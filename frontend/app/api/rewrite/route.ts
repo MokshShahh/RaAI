@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 const GEMINI_MODELS = [
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.0-pro:generateContent'
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 ];
 
 async function callGeminiWithRetry(prompt: string, maxRetries = 3): Promise<string> {
@@ -39,28 +38,23 @@ async function callGeminiWithRetry(prompt: string, maxRetries = 3): Promise<stri
           return data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response generated';
         }
 
-        // If overloaded, try next attempt or next model
         if (data.error?.message?.includes('overloaded') || response.status === 503) {
           console.log(`Model ${modelIndex + 1} is overloaded, attempt ${attempt}/${maxRetries}`);
           lastError = data.error;
           
-          // Wait before retry (exponential backoff)
           if (attempt < maxRetries) {
             await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
             continue;
           }
-          // If max retries reached, try next model
           break;
         }
 
-        // For other errors, throw immediately
         throw new Error(data.error?.message || `HTTP ${response.status}`);
 
       } catch (error) {
         console.error(`Error with model ${modelIndex + 1}, attempt ${attempt}:`, error);
         lastError = error;
         
-        // Wait before retry
         if (attempt < maxRetries) {
           await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
         }
@@ -68,7 +62,6 @@ async function callGeminiWithRetry(prompt: string, maxRetries = 3): Promise<stri
     }
   }
 
-  // If all models and retries failed
   throw lastError || new Error('All models failed');
 }
 
@@ -96,7 +89,6 @@ Rewritten text:`;
     } catch (error) {
       console.error('All retry attempts failed:', error);
       
-      // Check if it's an overload error
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (errorMessage.includes('overloaded')) {
         return NextResponse.json(
