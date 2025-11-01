@@ -49,7 +49,6 @@ interface SavedJournalEntry {
 
 
 export default function JournalPage() {
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   // 1. RE-DECLARE useRef
   const fileInputRef = useRef<HTMLInputElement>(null) 
   
@@ -64,38 +63,39 @@ export default function JournalPage() {
 
   const [attachedImage, setAttachedImage] = useState<File | null>(null)
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null)
+  // AI comment + TTS
+  const [aiComment, setAiComment] = useState<string | null>(null)
+  const [aiAudioUrl, setAiAudioUrl] = useState<string | null>(null)
   
   const [savedEntries, setSavedEntries] = useState<SavedJournalEntry[]>([])
 
 
   async function uploadAudio(audioFile: Blob){
-  const formData = new FormData();
-  formData.append('file', audioFile, 'consultation_audio.webm');
-
-  try {
-    const response = await fetch(`${API_BASE}/api/stt`, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+    try {
+      const result = await apiClient.stt(audioFile);
+      const transcript: string = result.transcript || '';
+      setJournalText(prev => prev + (prev ? ' ' : '') + transcript);
+    } catch (error) {
+      console.error('Error uploading audio for transcription:', error);
+      alert('Could not transcribe audio. Please try again.');
     }
+  };
 
-    const result = await response.json();
-    const transcript: string = result.transcript || '';
-    setJournalText(prev => prev + (prev ? ' ' : '') + transcript);
-  } catch (error) {
-    console.error('Error uploading audio for transcription:', error);
-  } finally { 
-  }
-};
+  // keep current stream for cleanup
+  const streamRef = useRef<MediaStream | null>(null)
 
   const startRecording = async () => {
     if (mediaRecorder) return; 
     
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          channelCount: 1
+        }
+      });
+      streamRef.current = stream;
       const recorder = new MediaRecorder(stream);
       setMediaRecorder(recorder);
       
@@ -111,6 +111,7 @@ export default function JournalPage() {
         const url = URL.createObjectURL(blob);
         setAudioUrl(url);
         stream.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
         setIsRecording(false);
       };
 
@@ -118,9 +119,16 @@ export default function JournalPage() {
       setIsRecording(true);
       setAudioBlob(null); 
       setAudioUrl(null);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error starting recording:', error);
-      alert("Microphone access denied or error starting recording.");
+      const err = error as { name?: string; message?: string };
+      if (err?.name === 'NotReadableError' || err?.name === 'TrackStartError') {
+        alert('Could not start the microphone. It may be in use by another app or blocked by the system. Close other apps using the mic and try again.');
+      } else if (err?.name === 'NotAllowedError') {
+        alert('Microphone permission was denied. Please allow mic access in your browser settings and try again.');
+      } else {
+        alert('Microphone access error. Please check your input device and try again.');
+      }
       setIsRecording(false);
     }
   };
@@ -129,6 +137,10 @@ export default function JournalPage() {
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
       mediaRecorder.stop();
       setMediaRecorder(null);
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
     }
   };
 
@@ -143,7 +155,10 @@ export default function JournalPage() {
   const handleVoiceNote = () => {
     if (isRecording) {
       stopRecording();
-    } else if (!audioBlob) {
+    } else if (audioBlob) {
+      // Clear when we have a recorded blob
+      clearRecording();
+    } else {
       startRecording();
     }
   };
@@ -189,8 +204,9 @@ export default function JournalPage() {
           sentiment: number;
           cognitive_distortions: string[];
           facet_signals: Record<string, string>;
+          one_line_insight?: string;
         };
-        recommendation?: { title: string; expected_outcome: string };
+        recommendation?: { title: string; expected_outcome: string; followup_question?: string };
       };
 
       // If an image is attached, use multipart upload endpoint
@@ -222,6 +238,11 @@ export default function JournalPage() {
           patterns: ["Safety concern detected"],
           recommendations: [response.message || "Please reach out for support"]
         });
+        setAiComment('I’m concerned about your safety. Please consider contacting a trusted person or a crisis line.');
+        try {
+          const url = await apiClient.tts('I’m concerned about your safety. Please consider contacting a trusted person or a crisis line.');
+          setAiAudioUrl(url);
+        } catch {}
       } else {
         const backendAnalysis = response.analysis;
         setAnalysis({
@@ -239,10 +260,27 @@ export default function JournalPage() {
             response.recommendation.expected_outcome
           ] : ["Continue journaling regularly"]
         });
+        // Build a short AI comment to voice
+        const insight = backendAnalysis?.one_line_insight || 'Thanks for sharing. I’m here with you.';
+        const follow = response.recommendation?.followup_question ? ` ${response.recommendation.followup_question}` : '';
+        const comment = `${insight}${follow}`.slice(0, 220);
+        setAiComment(comment);
+        try {
+          const url = await apiClient.tts(comment);
+          setAiAudioUrl(url);
+        } catch (e) {
+          console.warn('TTS failed', e);
+          setAiAudioUrl(null);
+        }
       }
     } catch (error) {
       console.error('Analysis failed:', error);
       setAnalysis(null);
+      setAiComment(null);
+      if (aiAudioUrl) {
+        URL.revokeObjectURL(aiAudioUrl);
+        setAiAudioUrl(null);
+      }
     } finally {
       setIsAnalyzing(false);
     }
@@ -274,6 +312,11 @@ export default function JournalPage() {
     setAnalysis(null);
     clearRecording();
     clearImage();
+    setAiComment(null);
+    if (aiAudioUrl) {
+      URL.revokeObjectURL(aiAudioUrl);
+      setAiAudioUrl(null);
+    }
   };
 
   const handleLoadEntry = (entry: SavedJournalEntry) => {
@@ -450,6 +493,14 @@ export default function JournalPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-6">
+                {aiComment && (
+                  <div className="p-3 rounded-md bg-muted">
+                    <p className="text-sm mb-2">{aiComment}</p>
+                    {aiAudioUrl && (
+                      <audio controls src={aiAudioUrl} className="h-8" />
+                    )}
+                  </div>
+                )}
                 {/* Emotions Detected */}
                 <div className="space-y-3">
                   <h4 className="font-medium flex items-center gap-2">

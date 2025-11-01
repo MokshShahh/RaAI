@@ -24,7 +24,13 @@ class ElevenLabsClient:
     """
     
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv("ELEVENLABS_API_KEY")
+        # Accept a single key or a comma-separated list; pick the first non-empty
+        raw_key = api_key or os.getenv("ELEVENLABS_API_KEY") or ""
+        if "," in raw_key:
+            parts = [p.strip() for p in raw_key.split(",") if p.strip()]
+            self.api_key = parts[0] if parts else ""
+        else:
+            self.api_key = raw_key
         self.enabled = bool(self.api_key)
         
         if self.enabled:
@@ -138,11 +144,47 @@ class ElevenLabsClient:
     
     def _mock_tts(self, text: str) -> bytes:
         """
-        Return mock audio bytes for testing.
+        Return mock audio as a small valid WAV tone to ensure browser playback.
         """
-        _LOG.debug("Using mock TTS", text_length=len(text))
-        # Return minimal valid MP3 header (silence)
-        return b'\xff\xfb\x90\x00' + b'\x00' * 100
+        _LOG.debug("Using mock TTS (WAV tone)", text_length=len(text))
+        import math
+        import struct
+
+        sample_rate = 44100
+        duration_s = 0.6
+        freq = 440.0
+        num_samples = int(sample_rate * duration_s)
+        amplitude = 0.2
+
+        # Generate PCM 16-bit mono samples
+        frames = bytearray()
+        for i in range(num_samples):
+            t = i / sample_rate
+            sample = int(32767 * amplitude * math.sin(2 * math.pi * freq * t))
+            frames += struct.pack('<h', sample)
+
+        # Build WAV header
+        byte_rate = sample_rate * 2  # mono, 16-bit
+        block_align = 2
+        subchunk2_size = len(frames)
+        chunk_size = 36 + subchunk2_size
+
+        header = bytearray()
+        header.extend(b'RIFF')
+        header.extend(struct.pack('<I', chunk_size))
+        header.extend(b'WAVE')
+        header.extend(b'fmt ')
+        header.extend(struct.pack('<I', 16))           # Subchunk1Size (PCM)
+        header.extend(struct.pack('<H', 1))            # AudioFormat (PCM)
+        header.extend(struct.pack('<H', 1))            # NumChannels (mono)
+        header.extend(struct.pack('<I', sample_rate))  # SampleRate
+        header.extend(struct.pack('<I', byte_rate))    # ByteRate
+        header.extend(struct.pack('<H', block_align))  # BlockAlign
+        header.extend(struct.pack('<H', 16))           # BitsPerSample
+        header.extend(b'data')
+        header.extend(struct.pack('<I', subchunk2_size))
+
+        return bytes(header + frames)
     
     def _mock_stt(self, audio_bytes: bytes) -> Dict[str, Any]:
         """

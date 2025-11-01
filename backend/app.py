@@ -9,6 +9,7 @@ import requests
 import asyncio
 import io
 import uuid
+from dotenv import load_dotenv
 
 from utils.elevenlabs_client import get_elevenlabs
 from rag.rag_pipeline import SingleDocumentIngestor, ConversationalRAG
@@ -23,6 +24,9 @@ from model.models import (
 )
 from db.mongo import get_mongo
 from logger.custom_logger import CustomLogger
+
+# Load environment variables from .env (local dev)
+load_dotenv()
 
 app = FastAPI()
 
@@ -1124,13 +1128,15 @@ async def text_to_speech(request: Request):
     
     client = get_elevenlabs()
     audio_bytes = client.text_to_speech(text, voice_id=voice_id)
+    media_type = "audio/mpeg" if getattr(client, "enabled", False) else "audio/wav"
+    filename = "speech.mp3" if media_type == "audio/mpeg" else "speech.wav"
     
     # Return audio as streaming response
     return StreamingResponse(
         io.BytesIO(audio_bytes),
-        media_type="audio/mpeg",
+        media_type=media_type,
         headers={
-            "Content-Disposition": "attachment; filename=speech.mp3"
+            "Content-Disposition": f"attachment; filename={filename}"
         }
     )
 

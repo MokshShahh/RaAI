@@ -25,16 +25,23 @@ class ApiClient {
     }
   }
 
-  private async request(endpoint: string, options: RequestInit = {}) {
+  private async request(endpoint: string, options: RequestInit = {}, timeoutMs: number = 20000) {
     const url = `${this.baseURL}${endpoint}`;
+    const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...options.headers as Record<string, string>,
+      ...(options.headers as Record<string, string>),
     };
+    // Only set JSON content type when not sending FormData
+    if (!isFormData && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
 
     if (this.token) {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       console.log(`Making API request to: ${url}`);
@@ -42,8 +49,7 @@ class ApiClient {
       const response = await fetch(url, {
         ...options,
         headers,
-        // Add timeout and other options
-        signal: AbortSignal.timeout(10000), // 10 second timeout
+        signal: controller.signal,
       });
 
       console.log(`API response status: ${response.status}`);
@@ -61,8 +67,16 @@ class ApiClient {
       if (error instanceof TypeError && error.message === 'Failed to fetch') {
         throw new Error('Cannot connect to backend server. Please check if the backend is running.');
       }
+      // If aborted (timeout), surface a clearer message
+      // Narrow error type shape for abort detection without using 'any'
+      const maybeErr = error as { name?: string } | undefined;
+      if (maybeErr && maybeErr.name === 'AbortError') {
+        throw new Error('Request timed out. The server took too long to respond.');
+      }
       
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -149,6 +163,39 @@ class ApiClient {
     }
   }
 
+  // Journal analysis upload (multipart/form-data)
+  async analyzeJournalEntryUpload(formData: FormData) {
+    const url = `${this.baseURL}/ai/analyze-entry-upload`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    try {
+      const headers: Record<string, string> = {};
+      if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        body: formData,
+        headers, // do NOT set Content-Type; browser will include boundary
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || `API request failed: ${res.status}`);
+      }
+      return await res.json();
+    } catch (error) {
+      const maybeErr = error as { name?: string; message?: string } | undefined;
+      if (maybeErr?.name === 'AbortError') {
+        throw new Error('Request timed out. The server took too long to respond.');
+      }
+      if (maybeErr?.message === 'Failed to fetch') {
+        throw new Error('Cannot connect to backend server. Please check if the backend is running.');
+      }
+      throw error as Error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   // Simple fallback emotion analysis
   private analyzeFallbackEmotions(text: string): Array<{ label: string; score: number }> {
     const emotions: Array<{ label: string; score: number }> = [];
@@ -188,6 +235,53 @@ class ApiClient {
     });
     
     return Math.max(-1, Math.min(1, score / Math.max(words.length / 10, 1)));
+  }
+
+  // Agentic chat (orchestrator)
+  async chat(sessionId: string, message: string, options?: { mode?: string; user_id?: string; generate_audio?: boolean }) {
+    // Allow more time for orchestrator (retrieval + LLM)
+    return await this.request(`/api/chat/${sessionId}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        message,
+        mode: options?.mode,
+        user_id: options?.user_id,
+        generate_audio: options?.generate_audio,
+      }),
+    }, 30000);
+  }
+
+  // Speech-to-text: send audio blob
+  async stt(audio: Blob) {
+    const url = `${this.baseURL}/api/stt`;
+    const form = new FormData();
+    form.append('file', audio, 'voice-note.webm');
+    const res = await fetch(url, { method: 'POST', body: form });
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.detail || `STT failed: ${res.status}`);
+    }
+    return await res.json(); // { transcript, confidence }
+  }
+
+  // Text-to-speech: returns a Blob URL for immediate playback
+  async tts(text: string, voice_id?: string): Promise<string> {
+    const url = `${this.baseURL}/api/tts`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice_id }),
+    });
+    if (!res.ok) {
+      // When ElevenLabs mock is used, server still returns audio
+      const errText = await res.text().catch(() => '');
+      throw new Error(`TTS failed: ${res.status} ${errText}`);
+    }
+    const buf = await res.arrayBuffer();
+    // Use response content type to build the proper blob
+    const ct = res.headers.get('Content-Type') || 'audio/mpeg';
+    const blob = new Blob([buf], { type: ct });
+    return URL.createObjectURL(blob);
   }
 
   // Other methods with basic error handling
