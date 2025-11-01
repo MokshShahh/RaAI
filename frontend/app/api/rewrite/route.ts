@@ -21,7 +21,7 @@ async function callGeminiWithRetry(prompt: string, maxRetries = 3): Promise<stri
             }]
           }]
         };
-
+        console.log(process.env.GEMINI_API_KEY)
         const response = await fetch(`${apiUrl}?key=${process.env.GEMINI_API_KEY}`, {
           method: 'POST',
           headers: {
