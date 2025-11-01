@@ -19,12 +19,28 @@ class ModelLoader:
 
     def _validate_env(self):
         """Validate necessary environment variables and Ensure API Keys exists."""
-        required_vars = ["GOOGLE_API_KEY", "GROQ_API_KEY"]
-        self.api_keys = {key: os.getenv(key) for key in required_vars}
-        missing = [k for k, v in self.api_keys.items() if not v]
-        if missing:
-            log.error("Missing environment variables",missing_vars = missing)
-            raise DocumentPortalException("Missing environment variables", sys)
+        # Check for at least one API key (more lenient)
+        google_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        groq_key = os.getenv("GROQ_API_KEY")
+        openai_key = os.getenv("OPENAI_API_KEY")
+        
+        self.api_keys = {
+            "GOOGLE_API_KEY": google_key,
+            "GROQ_API_KEY": groq_key,
+            "OPENAI_API_KEY": openai_key
+        }
+        
+        # Check if at least one provider is available
+        available_providers = [k for k, v in self.api_keys.items() if v]
+        
+        if not available_providers:
+            log.error("No API keys found", 
+                     hint="Set at least one: GOOGLE_API_KEY, GROQ_API_KEY, or OPENAI_API_KEY")
+            raise DocumentPortalException(
+                "No LLM API keys configured. Please set at least one: GOOGLE_API_KEY, GROQ_API_KEY, or OPENAI_API_KEY"
+            )
+        
+        log.info("Available LLM providers", providers=available_providers)
 
 
     def load_embeddings(self):
@@ -32,10 +48,15 @@ class ModelLoader:
         try:
             log.info("Loading embedding model.....")
             model_name = self.config["embedding_model"]["model_name"]
+            
+            # Check if Google API key is available
+            if not self.api_keys.get("GOOGLE_API_KEY"):
+                raise ValueError("GOOGLE_API_KEY not found. Embeddings require Google Gemini API.")
+            
             return GoogleGenerativeAIEmbeddings(model = model_name)
         except Exception as e:
             log.error("Error loading embedding model", error = str(e))
-            raise DocumentPortalException("Failed to load embedding model", sys)
+            raise DocumentPortalException(f"Failed to load embedding model: {str(e)}")
 
     def load_llm(self):
         """Load and Return the LLM Model"""

@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
-import { apiClient } from "@/lib/api"
+import { apiClient } from "../../lib/api"
+import Image from "next/image"
 import { 
   IconEdit, 
   IconMicrophone, 
@@ -44,15 +45,11 @@ interface SavedJournalEntry {
   imageFileName: string | null;
 }
 
-const mockFile = (fileName: string) => ({ 
-    name: fileName, 
-    type: 'image/jpeg', 
-    size: 1024, 
-    lastModified: Date.now() 
-}) as unknown as File;
+
 
 
 export default function JournalPage() {
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   // 1. RE-DECLARE useRef
   const fileInputRef = useRef<HTMLInputElement>(null) 
   
@@ -72,27 +69,26 @@ export default function JournalPage() {
 
 
   async function uploadAudio(audioFile: Blob){
-    const formData = new FormData();
-    formData.append('audio_file', audioFile, 'consultation_audio.webm');
+  const formData = new FormData();
+  formData.append('file', audioFile, 'consultation_audio.webm');
 
-    try {
-        const response = await fetch('http://0.0.0.0:8000/api/transcribe', {
-            method: 'POST',
-            body: formData,
-        });
+  try {
+    const response = await fetch(`${API_BASE}/api/stt`, {
+      method: 'POST',
+      body: formData,
+    });
 
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const result = await response.json();
-        setJournalText(journalText + result.data)
-        
-        
-    } catch (error) {
-        console.error('Error uploading audio for transcription:', error);
-    } finally { 
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
+
+    const result = await response.json();
+    const transcript: string = result.transcript || '';
+    setJournalText(prev => prev + (prev ? ' ' : '') + transcript);
+  } catch (error) {
+    console.error('Error uploading audio for transcription:', error);
+  } finally { 
+  }
 };
 
   const startRecording = async () => {
@@ -184,18 +180,40 @@ export default function JournalPage() {
     setIsAnalyzing(true);
     
     try {
-      const analysisData = {
-        user_id: "temp-user-id", // Replace with actual user ID
-        mood: 3, // Default mood, could be from a slider
-        journal: journalText,
-        // Added attachment placeholders back for full analysis functionality
-        audio_attachment: audioBlob ? `[Audio file attached: ${audioBlob.type}]` : null,
-        image_attachment: attachedImage ? `[Image file attached: ${attachedImage.name}]` : null,
-        context: {}
+      // Response shape matches backend /ai/analyze-entry endpoints
+      let response: {
+        safety?: { label?: string };
+        message?: string;
+        analysis: {
+          emotions: Array<{ label: string; score: number }>;
+          sentiment: number;
+          cognitive_distortions: string[];
+          facet_signals: Record<string, string>;
+        };
+        recommendation?: { title: string; expected_outcome: string };
       };
-  
-      const response = await apiClient.analyzeJournalEntry(analysisData);
-      
+
+      // If an image is attached, use multipart upload endpoint
+      if (attachedImage) {
+        const formData = new FormData();
+        formData.append('text', journalText);
+        formData.append('user_id', 'temp-user-id');
+        formData.append('session_id', 'journal_session');
+        formData.append('mood', String(3));
+        formData.append('file', attachedImage, attachedImage.name);
+        response = await apiClient.analyzeJournalEntryUpload(formData);
+      } else {
+        const analysisData = {
+          user_id: "temp-user-id", // Replace with actual user ID
+          mood: 3, // Default mood, could be from a slider
+          journal: journalText,
+          audio_attachment: audioBlob ? `[Audio file attached: ${audioBlob.type}]` : null,
+          image_attachment: null,
+          context: {}
+        };
+        response = await apiClient.analyzeJournalEntry(analysisData);
+      }
+
       if (response.safety?.label === 'ESCALATE') {
         setAnalysis({
           emotions: [],
@@ -206,13 +224,13 @@ export default function JournalPage() {
         });
       } else {
         const backendAnalysis = response.analysis;
-        const mockAnalysis = {
+        setAnalysis({
           emotions: backendAnalysis.emotions.map((e: { label: string; score: number }) => ({
             name: e.label,
             intensity: e.score
           })),
           sentiment: backendAnalysis.sentiment,
-          focus: Object.keys(backendAnalysis.facet_signals).find(key => 
+          focus: Object.keys(backendAnalysis.facet_signals).find(key =>
             backendAnalysis.facet_signals[key] === '-'
           ) || "Self-Awareness",
           patterns: backendAnalysis.cognitive_distortions,
@@ -220,27 +238,11 @@ export default function JournalPage() {
             `Try: ${response.recommendation.title}`,
             response.recommendation.expected_outcome
           ] : ["Continue journaling regularly"]
-        };
-        
-        setAnalysis(mockAnalysis);
+        });
       }
-      
     } catch (error) {
       console.error('Analysis failed:', error);
-      const mockAnalysis = {
-        emotions: [
-          { name: "Reflection", intensity: 0.7 },
-          { name: "Curiosity", intensity: 0.5 }
-        ],
-        sentiment: 0.1,
-        focus: "Self-Awareness",
-        patterns: ["Introspective thinking"],
-        recommendations: [
-          "Continue regular journaling",
-          "Try mindfulness exercises"
-        ]
-      };
-      setAnalysis(mockAnalysis);
+      setAnalysis(null);
     } finally {
       setIsAnalyzing(false);
     }
@@ -275,27 +277,22 @@ export default function JournalPage() {
   };
 
   const handleLoadEntry = (entry: SavedJournalEntry) => {
-    setJournalText(entry.text);
-    setAnalysis(entry.analysis);
+  setJournalText(entry.text);
+  setAnalysis(entry.analysis);
 
-    if (audioUrl) {
-        URL.revokeObjectURL(audioUrl);
-    }
-    setAudioUrl(entry.audioUrl);
+  if (audioUrl) {
+    URL.revokeObjectURL(audioUrl);
+  }
+  setAudioUrl(entry.audioUrl);
 
-    if (imagePreviewUrl) {
-        URL.revokeObjectURL(imagePreviewUrl);
-    }
-    if (entry.imageFileName) {
-        const file = mockFile(entry.imageFileName);
-        setAttachedImage(file);
+  if (imagePreviewUrl) {
+    URL.revokeObjectURL(imagePreviewUrl);
+  }
+  // Remove mockFile usage; just clear or set null for image
+  setAttachedImage(null);
+  setImagePreviewUrl(null);
 
-    } else {
-        setAttachedImage(null);
-        setImagePreviewUrl(null);
-    }
-
-    alert(`Entry from ${new Date(entry.date).toLocaleTimeString()} loaded.`);
+  alert(`Entry from ${new Date(entry.date).toLocaleTimeString()} loaded.`);
   };
 
 
@@ -374,7 +371,9 @@ export default function JournalPage() {
                       <span className="text-sm font-medium truncate max-w-[150px]">{attachedImage.name}</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <img src={imagePreviewUrl} alt="Preview" className="h-8 w-8 object-cover rounded" />
+                      {imagePreviewUrl && (
+                        <Image src={imagePreviewUrl} alt="Preview" width={32} height={32} className="h-8 w-8 object-cover rounded" />
+                      )}
                       <Button variant="ghost" size="icon" onClick={clearImage}>
                         <IconTrash className="h-4 w-4 text-red-500" />
                       </Button>

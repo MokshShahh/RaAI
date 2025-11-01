@@ -73,6 +73,13 @@ async function callGeminiWithRetry(prompt: string, maxRetries = 3): Promise<stri
 
 export async function POST(request: NextRequest) {
   try {
+    if (!process.env.GEMINI_API_KEY) {
+      return NextResponse.json(
+        { error: 'GEMINI_API_KEY is not configured on the server. Please add it to your environment.' },
+        { status: 500 }
+      );
+    }
+
     const { text, style } = await request.json();
 
     if (!text || typeof text !== 'string') {

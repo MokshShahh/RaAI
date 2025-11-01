@@ -30,17 +30,30 @@ def _truncate_words(text: str, max_words: int) -> str:
 
 def _first_question(text: str) -> str:
     """
-    Extract the first question ending with '?'.
-    If none, take first line/sentence and append '?' if needed.
+    Extract a clean first question. Avoid returning preceding metadata lines.
+    Strategy:
+    - Scan line by line and return the first sentence (up to '?') on the first line containing '?'
+    - If none, fall back to first non-empty line or sentence and add '?'
     """
-    text = text.strip()
-    # first sentence ending with '?'
-    m = re.search(r"(.+?\?)", text, flags=re.DOTALL)
-    if m:
-        return m.group(1).strip()
+    text = (text or "").strip()
+    if not text:
+        return "What feels most present right now?"
 
-    # fallback split by line or period
-    piece = text.splitlines()[0].strip() if "\n" in text else text.split(".")[0].strip()
+    # Prefer the first line that contains a question mark
+    for line in text.splitlines():
+        if "?" in line:
+            piece = line.split("?")[0].strip() + "?"
+            return piece
+
+    # Fallback: take the first non-empty line or sentence
+    for line in text.splitlines():
+        s = line.strip()
+        if s:
+            if not s.endswith("?"):
+                s = (s + "?").replace("??", "?")
+            return s
+
+    piece = text.split(".")[0].strip() if "." in text else text
     if not piece.endswith("?"):
         piece = (piece + "?").replace("??", "?")
     return piece

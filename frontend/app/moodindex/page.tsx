@@ -2,12 +2,13 @@
 
 import React, { useState, useEffect, useRef, FormEvent, memo } from 'react';
 import { Loader2, Send } from 'lucide-react';
-import { cn } from "@/lib/utils";
+import { cn } from "../../lib/utils";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scrollarea";
+import { apiClient } from "@/lib/api";
 
 interface Message {
   id: string;
@@ -18,6 +19,7 @@ interface Message {
 
 const USER_ID = 'user123';
 const BOT_ID = 'bot';
+const SESSION_ID = 'mood_chat_session';
 const BOT_GREETING: Message = {
   id: '1',
   text: 'Hello! How are you feeling today?',
@@ -99,25 +101,14 @@ const MoodIndex = () => {
     setLoading(true);
   
     try {
-      // Call your backend API
-      const response = await fetch('http://localhost:8000/chat/mood', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: currentInput,
-          session_id: 'mood_chat_session'
-        })
-      });
-  
-      const data = await response.json();
-      
+      // Use agentic orchestrator chat endpoint
+      const data = await apiClient.chat(SESSION_ID, currentInput, { user_id: USER_ID });
       const botResponse: Message = {
         id: (Date.now() + 1).toString(),
-        text: data.response || "I'm here to listen and support you.",
+        text: data.text || "I'm here to support you. What's on your mind right now?",
         senderId: BOT_ID,
         timestamp: new Date(),
       };
-      
       setMessages((prev) => [...prev, botResponse]);
     } catch (error) {
       console.error('Chat API failed:', error);
@@ -158,7 +149,7 @@ const MoodIndex = () => {
               disabled={loading}
               className="flex-1"
             />
-            <Button size="icon" type="submit" disabled={loading || input.trim() === ''} className="flex-shrink-0">
+            <Button size="icon" type="submit" disabled={loading || input.trim() === ''} className="shrink-0">
               {loading ? <Loader2 className="animate-spin" /> : <Send size={20} />}
             </Button>
           </form>

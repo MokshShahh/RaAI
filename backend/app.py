@@ -34,50 +34,190 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Get Gemini API Key from environment
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# Get API Keys from environment - OpenAI primary, Gemini fallback
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or ""
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
-async def call_gemini(prompt: str):
-    """Call Gemini API for real AI responses"""
-    if not GEMINI_API_KEY:
-        return "Mock response: I'm here to help you with your emotional wellness journey."
+# Conversation history per session
+conversation_history = {}
 
-    SYSTEM_PROMPT = """
-        You are 'Aura', a compassionate and non-judgmental AI emotional wellness companion. 
-        Your role is to listen empathetically, validate the user's feelings, and offer reflective 
-        questions or gentle coping suggestions. Do not diagnose or offer professional medical advice. 
-        Keep your responses concise, supportive, and focused on helping the user explore their current state.
-        """
+async def call_llm(prompt: str, session_id: str = "default", conversation_context: str = ""):
+    """
+    Call LLM API for real AI responses; tries OpenAI first, then Gemini, then fallback.
+    Maintains conversation history to avoid repetitive responses.
+    """
+    # Initialize session history if needed
+    if session_id not in conversation_history:
+        conversation_history[session_id] = []
     
+    # Add user message to history
+    conversation_history[session_id].append({"role": "user", "content": prompt})
+    
+    # Keep only last 10 messages to avoid token limits
+    if len(conversation_history[session_id]) > 10:
+        conversation_history[session_id] = conversation_history[session_id][-10:]
 
-    try:
-        payload = {
-            "config": {
-                "system_instruction": SYSTEM_PROMPT
-            },
-            "contents": [
-                {"role": "user", "parts": [{"text": prompt}]}
+    SYSTEM_PROMPT = """You are 'Aura', a compassionate and non-judgmental AI emotional wellness companion. 
+Your role is to listen empathetically, validate the user's feelings, and offer reflective questions or gentle coping suggestions.
+
+IMPORTANT RULES:
+1. Never repeat the same question or response pattern twice in a row
+2. Build on the conversation - reference what the user just said
+3. Ask specific follow-up questions based on their actual words
+4. Vary your response style - don't always ask "What part feels heaviest?"
+5. Show you're truly listening by addressing their specific emotion or situation
+6. Keep responses under 50 words, supportive and focused
+
+Do not diagnose or offer professional medical advice."""
+
+    # Try OpenAI first
+    if OPENAI_API_KEY:
+        try:
+            headers = {
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+            # Add conversation context if provided
+            if conversation_context:
+                messages.append({"role": "system", "content": f"Recent conversation context: {conversation_context}"})
+            messages.extend(conversation_history[session_id])
+            
+            payload = {
+                "model": "gpt-4o-mini",
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 150
+            }
+            
+            response = requests.post(OPENAI_URL, json=payload, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json()
+                assistant_message = data["choices"][0]["message"]["content"]
+                # Add to history
+                conversation_history[session_id].append({"role": "assistant", "content": assistant_message})
+                return assistant_message
+        except Exception as e:
+            _LOG = CustomLogger().get_logger(__name__)
+            _LOG.warning("OpenAI call failed, trying Gemini", error=str(e))
+
+    # Try Gemini as fallback
+    if GEMINI_API_KEY:
+        try:
+            payload = {
+                "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                "contents": [
+                    {"role": "user", "parts": [{"text": msg["content"]}]} 
+                    if msg["role"] == "user" 
+                    else {"role": "model", "parts": [{"text": msg["content"]}]}
+                    for msg in conversation_history[session_id]
+                ]
+            }
+            
+            response = requests.post(
+                f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+                json=payload,
+                timeout=15
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                assistant_message = data["candidates"][0]["content"]["parts"][0]["text"]
+                conversation_history[session_id].append({"role": "assistant", "content": assistant_message})
+                return assistant_message
+        except Exception as e:
+            _LOG = CustomLogger().get_logger(__name__)
+            _LOG.warning("Gemini call failed, using fallback", error=str(e))
+    
+    # Smart fallback if no API keys work
+    assistant_message = generate_contextual_fallback(prompt, conversation_history[session_id])
+    conversation_history[session_id].append({"role": "assistant", "content": assistant_message})
+    return assistant_message
+
+
+def generate_contextual_fallback(current_message: str, history: list) -> str:
+    """
+    Heuristic, empathetic fallback response when no LLM key is available.
+    Uses conversation history to avoid repetitive responses.
+    """
+    msg = (current_message or "").strip()
+    if not msg:
+        return "I'm here with you. What's been on your mind today?"
+
+    lower = msg.lower()
+    
+    # Get last assistant response to avoid repetition
+    last_response = ""
+    for msg_obj in reversed(history):
+        if msg_obj.get("role") == "assistant":
+            last_response = msg_obj.get("content", "").lower()
+            break
+    
+    # Detect specific emotions and situations
+    if any(w in lower for w in ["pissed", "angry", "mad", "furious", "rage"]):
+        if "friend" in lower or "relationship" in lower:
+            responses = [
+                "Anger toward someone we care about can be really complicated. What do you think triggered this feeling?",
+                "It's tough when someone close to us makes us angry. What boundary feels crossed here?",
+                "That mix of caring and anger is hard to sit with. What would you want them to understand?",
             ]
-        }
-        print(GEMINI_API_KEY)
-        print(GEMINI_URL)
-        response = requests.post(
-            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
-            json=payload,
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            try:
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-            except (KeyError, IndexError):
-                return "I hear you, but I couldn't process that thought clearly. Can you rephrase?"
         else:
-            return "I'm here to support you. How are you feeling right now?" + str(response.text)
-    except Exception as e:
-        return "I understand you're reaching out. What's on your mind today?"
+            responses = [
+                "That anger sounds intense. What happened that sparked this?",
+                "I hear that frustration. What would help you process this feeling right now?",
+                "What do you think is underneath the anger?",
+            ]
+        # Pick response that wasn't just used
+        for r in responses:
+            if r.lower() not in last_response and last_response not in r.lower():
+                return r
+        return responses[0]
+    
+    if any(w in lower for w in ["confused", "don't know", "unsure", "unclear"]):
+        responses = [
+            "Confusion is valid. Let's explore this together - what feels most cloudy right now?",
+            "Not knowing is okay. What's one small piece you do feel clear about?",
+            "When things feel unclear, sometimes it helps to name what you do know. What's certain for you right now?",
+        ]
+        for r in responses:
+            if r.lower() not in last_response:
+                return r
+        return responses[0]
+    
+    if any(w in lower for w in ["relationship", "dating", "girlfriend", "boyfriend", "ex"]):
+        return "Relationship dynamics can be complex. What aspect of this situation feels most pressing to you?"
+    
+    if any(w in lower for w in ["stuck", "decision", "choose", "choice"]):
+        return "Being at a crossroads is uncomfortable. What values or priorities feel most important as you consider this?"
+    
+    if any(w in lower for w in ["sad", "down", "blue", "depressed"]):
+        return "I hear the sadness in what you're sharing. What do you need most in this moment?"
+    
+    if any(w in lower for w in ["anxious", "worried", "nervous", "anxiety"]):
+        return "Anxiety can be overwhelming. What feels most out of control right now?"
+    
+    if any(w in lower for w in ["stressed", "overwhelmed", "pressure"]):
+        return "That sounds like a lot to carry. What's one thing that might lighten the load, even slightly?"
+    
+    # Generic contextual responses that vary
+    if len(msg) < 15:
+        return "Tell me more - I'm listening."
+    
+    responses = [
+        "I appreciate you sharing that with me. What else is present for you?",
+        "That's important information. How is this affecting you right now?",
+        "I'm here with you in this. What matters most to you about this situation?",
+        "Thank you for trusting me with this. What would feel supportive right now?",
+    ]
+    
+    for r in responses:
+        if r.lower() not in last_response:
+            return r
+    return responses[0]
 
 @app.get("/health")
 async def health():
@@ -92,7 +232,8 @@ async def health():
     return {
         "status": "ok",
         "retriever_ready": True,
-        "ai_enabled": bool(GEMINI_API_KEY),
+        "ai_enabled": bool(OPENAI_API_KEY or GEMINI_API_KEY),
+        "llm_provider": "openai" if OPENAI_API_KEY else ("gemini" if GEMINI_API_KEY else "fallback"),
         "db_connected": db_connected,
     }
 
@@ -144,7 +285,7 @@ async def analyze_entry(request: Request):
     Journal entry: "{text}"
     """
     
-    ai_response = await call_gemini(analysis_prompt)
+    ai_response = await call_llm(analysis_prompt, session_id=session_id or "journal")
     
     # Try to parse AI response, fallback if needed
     try:
@@ -223,6 +364,112 @@ async def analyze_entry(request: Request):
 
     return result
 
+@app.post("/ai/analyze-entry-upload")
+async def analyze_entry_upload(
+    text: Optional[str] = Form(default=""),
+    user_id: Optional[str] = Form(default=None),
+    session_id: Optional[str] = Form(default=None),
+    mood: Optional[int] = Form(default=None),
+    file: Optional[UploadFile] = File(default=None),
+):
+    """
+    Multipart variant of analyze-entry that accepts optional image/audio upload.
+    Currently, the uploaded file is acknowledged but not processed; analysis is
+    performed on text only. This keeps parity with JSON endpoint while allowing
+    clients to send attachments.
+    """
+    journal_text = text or ""
+
+    # Build prompt (note attachment presence)
+    attachment_hint = " An image was attached." if file is not None else ""
+    analysis_prompt = f"""
+    Analyze this journal entry for emotional content. Respond in JSON format:
+    {{
+        "emotions": [list of {{"label": "emotion_name", "score": 0.0-1.0}}],
+        "sentiment": -1.0 to 1.0,
+        "insights": "brief insight about the emotional state",
+        "recommendations": ["list of 2-3 helpful suggestions"]
+    }}
+
+    Journal entry: "{journal_text}"
+    {attachment_hint}
+    """
+
+    ai_response = await call_llm(analysis_prompt, session_id=session_id or "journal")
+
+    # Try to parse AI response, fallback if needed
+    try:
+        start = ai_response.find('{')
+        end = ai_response.rfind('}') + 1
+        if start != -1 and end > start:
+            ai_data = json.loads(ai_response[start:end])
+        else:
+            raise ValueError("No JSON found")
+    except:
+        emotions = []
+        txt = journal_text.lower()
+        if any(w in txt for w in ["happy", "good", "great"]): emotions.append({"label": "Joy", "score": 0.8})
+        if any(w in txt for w in ["sad", "down", "upset"]): emotions.append({"label": "Sadness", "score": 0.7})
+        if any(w in txt for w in ["angry", "mad", "frustrated"]): emotions.append({"label": "Anger", "score": 0.6})
+        if not emotions: emotions.append({"label": "Reflection", "score": 0.5})
+
+        ai_data = {
+            "emotions": emotions,
+            "sentiment": 0.1,
+            "insights": "Continue reflecting on your experiences",
+            "recommendations": ["Practice mindfulness", "Consider talking to someone", "Take care of your basic needs"],
+        }
+
+    result = {
+        "safety": {"label": "SAFE"},
+        "analysis": {
+            "emotions": ai_data.get("emotions", []),
+            "sentiment": ai_data.get("sentiment", 0),
+            "cognitive_distortions": [],
+            "topics": ["reflection"],
+            "facet_signals": {"self_awareness": "0", "self_regulation": "0", "motivation": "0", "empathy": "0", "social_skills": "0"},
+            "one_line_insight": ai_data.get("insights", "Continue reflecting"),
+        },
+        "recommendation": {
+            "exercise_id": "ai_suggested",
+            "title": "Personalized Exercise",
+            "steps": ai_data.get("recommendations", ["Take a deep breath", "Reflect on your feelings"]),
+            "expected_outcome": "Improved emotional awareness",
+            "source_doc_id": "ai_generated",
+            "followup_question": "How do you feel after trying this?",
+        },
+    }
+
+    # derive mood_index from sentiment
+    try:
+        sentiment = float(result["analysis"]["sentiment"])
+        mood_index = max(0.0, min(100.0, ((sentiment + 1.0) / 2.0) * 100.0))
+    except Exception:
+        mood_index = 50.0
+
+    # best-effort persistence
+    try:
+        if user_id and session_id:
+            mongo = get_mongo()
+            mongo.add_message({
+                "session_id": session_id,
+                "user_id": user_id,
+                "role": "user",
+                "content": journal_text,
+                "metadata": {"source": "journal", "mood_index": mood_index, "attachment": bool(file)},
+            })
+            mongo.add_message({
+                "session_id": session_id,
+                "user_id": user_id,
+                "role": "assistant",
+                "content": result["analysis"].get("one_line_insight", ""),
+                "metadata": {"source": "analysis", "mood_index": mood_index},
+            })
+    except Exception:
+        pass
+
+    return result
+
 # REAL-TIME CHATBOT
 chat_sessions = {}
 
@@ -233,32 +480,47 @@ async def chat_mood(request: Request):
     data = await request.json()
     message = data.get("message", "")
     user_id = data.get("user_id")
-    session_id = data.get("session_id")
+    session_id = data.get("session_id", "default")
     
     # Safety check first
     if any(word in message.lower() for word in ["die", "kill", "hurt", "suicide"]):
         return {
             "response": "I'm concerned about what you're sharing. Please reach out to someone you trust or contact a crisis helpline. You matter and support is available.",
-            "session_id": data.get("session_id", "default")
+            "session_id": session_id
         }
     
-    # Real AI chat response
-    chat_prompt = f"""
-    You are an empathetic emotional wellness coach. Respond to this message with care and understanding.
-    Keep responses under 50 words. Be supportive but not clinical.
+    # Get conversation context from recent messages
+    conversation_context = ""
+    try:
+        if user_id and session_id:
+            mongo = get_mongo()
+            recent_msgs = mongo.get_session_messages(session_id=session_id, limit=6)
+            if recent_msgs:
+                context_parts = []
+                for msg in recent_msgs[-6:]:
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if role and content:
+                        context_parts.append(f"{role}: {content[:100]}")
+                conversation_context = " | ".join(context_parts)
+    except Exception:
+        pass
     
-    User message: "{message}"
+    # Real AI chat response with conversation history
+    chat_prompt = f"""The user is sharing their emotional state. Respond with empathy and understanding.
+Keep under 50 words. Build on what they just said - don't repeat yourself.
+
+User says: "{message}"
+
+Your supportive response:"""
     
-    Response:
-    """
-    
-    response = await call_gemini(chat_prompt)
+    response = await call_llm(chat_prompt, session_id=session_id, conversation_context=conversation_context)
     
     # naive mood index from keywords
     txt = message.lower()
     mood_index = 50
     pos = ["happy", "good", "great", "calm", "okay", "fine"]
-    neg = ["sad", "bad", "angry", "upset", "stressed", "anxious"]
+    neg = ["sad", "bad", "angry", "upset", "stressed", "anxious", "pissed"]
     mood_index += 10 if any(w in txt for w in pos) else 0
     mood_index -= 10 if any(w in txt for w in neg) else 0
     mood_index = max(0, min(100, mood_index))
@@ -285,8 +547,8 @@ async def chat_mood(request: Request):
         pass
 
     return {
-        "response": response.strip(),
-        "session_id": data.get("session_id", "default")
+        "response": (response or "").strip(),
+        "session_id": session_id
     }
 
 @app.get("/ai/get-baseline-questions")
@@ -491,7 +753,7 @@ async def get_exercise(request: Request):
     Make it practical and doable in 2-5 minutes.
     """
     
-    ai_response = await call_gemini(exercise_prompt)
+    ai_response = await call_llm(exercise_prompt, session_id="exercise")
     
     try:
         start = ai_response.find('{')
@@ -959,6 +1221,40 @@ async def adaptive_chat(session_id: str, request: Request):
             except Exception:
                 pass
         
+        # Best-effort persistence with mood_index metadata (to power analytics)
+        try:
+            mongo = get_mongo()
+            # derive mood_index: prefer sentiment (-1..1), else keyword heuristic
+            sentiment_val = result.get("sentiment")
+            if isinstance(sentiment_val, (int, float)):
+                mood_index = max(0.0, min(100.0, ((float(sentiment_val) + 1.0) / 2.0) * 100.0))
+            else:
+                txt = (message or "").lower()
+                mood_index = 50
+                pos = ["happy", "good", "great", "calm", "okay", "fine"]
+                neg = ["sad", "bad", "angry", "upset", "stressed", "anxious", "pissed"]
+                mood_index += 10 if any(w in txt for w in pos) else 0
+                mood_index -= 10 if any(w in txt for w in neg) else 0
+                mood_index = max(0, min(100, mood_index))
+
+            if user_id and session_id:
+                mongo.add_message({
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "role": "user",
+                    "content": message,
+                    "metadata": {"source": "agentic_chat", "mood_index": mood_index},
+                })
+                mongo.add_message({
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "role": "assistant",
+                    "content": result.get("text", ""),
+                    "metadata": {"source": "agentic_chat", "mood_index": mood_index},
+                })
+        except Exception:
+            pass
+
         return {
             "text": result.get("text"),
             "citations": result.get("citations", []),

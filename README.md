@@ -18,7 +18,7 @@ An AI-powered emotional intelligence coach using Retrieval-Augmented Generation 
 
 1. **Clone the repository**
 ```bash
-git clone https://github.com/taqneeq/talking-rock.git
+git clone https://github.com/MokshShahh/RaAI.git
 cd RaAI
 ```
 
@@ -82,13 +82,12 @@ npm run dev
 - **RAG-Powered Exercises**: Personalized recommendations from wellness document corpus
 - **Session Management**: Multiple named conversations like ChatGPT
 - **Offline-First Frontend**: Graceful degradation with local fallbacks
-- **TTS/STT Integration**: ElevenLabs voice I/O with mock fallbacks
+- **Voice Transcription**: AssemblyAI-powered voice-to-text journaling (frontend-only)
 - **Crisis Detection**: Keyword + LLM-based safety escalation
 
 ## 📚 Documentation
 
-- [**GitHub Copilot Instructions**](.github/copilot-instructions.md) - AI agent guide
-- [**Architecture Vision**](COPILOT_PROMPT.md) - System design and roadmap
+- [**Architecture**](COPILOT_PROMPT.md) - System design and roadmap
 - [**API Documentation**](http://localhost:8000/docs) - Interactive Swagger UI (when backend running)
 
 ## 🧪 Testing
@@ -130,6 +129,7 @@ Optional:
 - `ELEVENLABS_API_KEY` - TTS/STT (uses mocks if not set)
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` - SMS alerts
 - `FCM_SERVER_KEY` - Push notifications
+- `NEXT_PUBLIC_ASSEMBLYAI_API_KEY` - Frontend voice transcription (AssemblyAI)
 
 ### LLM Provider Selection
 
@@ -184,7 +184,7 @@ Contributions welcome! Please:
 
 ### Development Guidelines
 
-- Follow existing patterns (see `.github/copilot-instructions.md`)
+- Follow existing patterns in the codebase
 - Add tests for new features
 - Use structured logging (see `logger/custom_logger.py`)
 - All LLM calls must use `PROMPT_REGISTRY`
@@ -204,7 +204,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📧 Contact
 
-Project Link: [https://github.com/taqneeq/talking-rock](https://github.com/taqneeq/talking-rock)
+Project Link: [https://github.com/MokshShahh/RaAI](https://github.com/MokshShahh/RaAI)
 
 ---
 

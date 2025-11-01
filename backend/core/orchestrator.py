@@ -415,8 +415,12 @@ class SentimentAgent:
         Returns: {sentiment: str, scores: dict, zscore: float, events: list}
         """
         try:
-            # Use existing journal analyzer
-            analysis = analyze_entry(text, mood=5, context_json="{}", llm=None)
+            # Use existing journal analyzer with proper payload signature
+            analysis = analyze_entry({
+                "journal": text,
+                "mood": 5,
+                "context": {}
+            }, llm=None)
             
             # Compute z-score from recent history
             mongo = get_mongo()

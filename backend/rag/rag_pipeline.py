@@ -187,7 +187,11 @@ class ConversationalRAG:
         Returns list of chunk texts.
         """
         try:
-            docs = retriever.get_relevant_documents(query)
+            if hasattr(retriever, "get_relevant_documents"):
+                docs = retriever.get_relevant_documents(query)
+            else:
+                # Runnable-style retrievers use invoke()
+                docs = retriever.invoke(query)
             chunks = [doc.page_content for doc in docs[:k]]
             self.log.info("Search completed", query=query[:50], chunks_found=len(chunks))
             return chunks
