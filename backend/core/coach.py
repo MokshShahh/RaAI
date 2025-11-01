@@ -28,35 +28,45 @@ def _truncate_words(text: str, max_words: int) -> str:
     return " ".join(words[:max_words]).rstrip(",.;:") + "…"
 
 
-def _first_question(text: str) -> str:
-    """
-    Extract a clean first question. Avoid returning preceding metadata lines.
-    Strategy:
-    - Scan line by line and return the first sentence (up to '?') on the first line containing '?'
-    - If none, fall back to first non-empty line or sentence and add '?'
-    """
-    text = (text or "").strip()
-    if not text:
-        return "What feels most present right now?"
+def _sanitize_coach_output(text: str, max_words: int = 90, max_sentences: int = 2) -> str:
+    """Clean LLM output, keep 1–2 sentences, and ensure a reflective question is present."""
+    t = (text or "").strip()
+    if not t:
+        return "I hear you. What feels most present for you right now?"
 
-    # Prefer the first line that contains a question mark
-    for line in text.splitlines():
-        if "?" in line:
-            piece = line.split("?")[0].strip() + "?"
-            return piece
+    # Remove code fences and obvious metadata lines
+    lines = []
+    for line in t.splitlines():
+        s = line.strip().strip("` ")
+        if not s:
+            continue
+        lower = s.lower()
+        if lower.startswith(("facet:", "emotions:", "last_entry_summary:", "state:", "metadata:")):
+            continue
+        lines.append(s)
+    t = " ".join(lines)
 
-    # Fallback: take the first non-empty line or sentence
-    for line in text.splitlines():
-        s = line.strip()
-        if s:
-            if not s.endswith("?"):
-                s = (s + "?").replace("??", "?")
-            return s
+    # Split into sentences conservatively
+    import re
+    parts = re.split(r"(?<=[.!?])\s+", t)
+    parts = [p.strip() for p in parts if p.strip()]
+    if not parts:
+        return "I’m with you in this. What would feel most supportive right now?"
 
-    piece = text.split(".")[0].strip() if "." in text else text
-    if not piece.endswith("?"):
-        piece = (piece + "?").replace("??", "?")
-    return piece
+    # Keep the first N sentences
+    selected = parts[:max_sentences]
+    out = " ".join(selected)
+
+    # Word limit
+    words = out.split()
+    if len(words) > max_words:
+        out = " ".join(words[:max_words]).rstrip(",.;:") + "…"
+
+    # Ensure at least one question
+    if "?" not in out:
+        out = out.rstrip(". ") + " What feels most important to explore next?"
+
+    return out
 
 
 def _facet_fallback_question(facet: str, emotions: List[Dict[str, Any]], last_summary: str) -> str:
@@ -113,11 +123,7 @@ def coach_question(state: Dict[str, Any], llm=None) -> str:
             )
             resp = chat.invoke(messages)
             raw = getattr(resp, "content", None) or str(resp)
-            q = _first_question(raw)
-            q = _truncate_words(q, 20)
-            # Ensure it's a question
-            if not q.endswith("?"):
-                q = (q + "?").replace("??", "?")
+            q = _sanitize_coach_output(raw, max_words=90, max_sentences=2)
             return q
         except Exception as e:
             _LOG.error("coach_question LLM failed; using fallback", error=str(e))

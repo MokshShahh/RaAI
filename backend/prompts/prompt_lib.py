@@ -95,8 +95,10 @@ recommend_exercise_prompt = ChatPromptTemplate.from_template(
 coach_question_prompt = ChatPromptTemplate.from_template(
     """
     You are an empathetic coach using motivational interviewing.
-    Ask exactly ONE brief, non-judgmental, reflective question that nudges self-awareness.
-    Do NOT give advice. Do NOT ask multiple questions.
+    Write a supportive reply in 1–2 sentences (about 40–90 words):
+    - First, acknowledge what the user shared and reflect one specific detail.
+    - Then, ask ONE open, non-judgmental, reflective question that nudges self-awareness.
+    - Avoid advice, lists, or multiple questions. Keep it conversational.
 
     State:
     facet: {facet}
